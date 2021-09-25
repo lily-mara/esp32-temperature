@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -e
+
+cargo +stable fmt
+
+cargo build --release
+
+espflash /dev/tty.usbserial-02123A69 target/xtensa-esp32-espidf/release/esp32-rust
+espmonitor --speed 115200 /dev/tty.usbserial-02123A69

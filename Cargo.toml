@@ -21,7 +21,14 @@ esp-idf-sys = { version = "0.20" }
 embedded-svc = "0.8.3"
 esp-idf-svc = { version = "0.20", features = ["binstart"] }
 esp-idf-hal = "0.20"
+log = "0.4"
+mutex-trait = "0.2"
+esp32-hal = "0.3"
+esp32 = "0.11.0"
 
 [build-dependencies]
 embuild = "0.24"
 anyhow = "1"
+
+[patch.crates-io]
+esp-idf-sys = {path="/Users/lily/projects/github.com/esp-rs/esp-idf-sys"}
