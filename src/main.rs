@@ -4,7 +4,7 @@ use std::{fmt::Write, sync::Arc, thread, time::Duration};
 
 use crate::mdns::{EspMdns, MdnsService};
 use anyhow::{bail, Result};
-use log::info;
+use log::{error, info};
 use mutex_trait::Mutex;
 
 use embedded_svc::httpd::registry::Registry;
@@ -19,94 +19,69 @@ use esp_idf_svc::netif::EspNetifStack;
 use esp_idf_svc::nvs::EspDefaultNvs;
 use esp_idf_svc::sysloop::*;
 use esp_idf_svc::wifi::EspWifi;
-use esp_idf_sys::EspMutex;
+use esp_idf_sys::{esp, EspMutex};
 
-use esp32_hal::analog::adc::ADC;
-use esp32_hal::analog::config::Adc1Config;
-use esp32_hal::analog::config::Attenuation;
-use esp32_hal::analog::SensExt;
-use esp32_hal::analog::ADC1;
-use esp32_hal::gpio::*;
-use esp32_hal::gpio::{Analog, GpioExt};
+use esp_idf_sys::{
+    adc1_channel_t_ADC1_CHANNEL_4, adc1_config_channel_atten, adc1_config_width, adc1_get_raw,
+    adc_atten_t_ADC_ATTEN_DB_11, adc_bits_width_t_ADC_WIDTH_BIT_12,
+};
+
+use dotenv_codegen::dotenv;
 
 mod mac;
 mod mdns;
 
-const SSID: &str = env!("WIFI_SSID");
-const PASS: &str = env!("WIFI_PASS");
+const SSID: &str = dotenv!("WIFI_SSID");
+const PASS: &str = dotenv!("WIFI_PASS");
 
-struct Stats {
-    start: Instant,
-    battery_volts: Option<f32>,
-    temperature: Option<f32>,
-    raw_adc: Option<u16>,
+static mut TEMPERATURE: EspMutex<f32> = EspMutex::new(0.0);
+
+fn battery() -> Result<f32> {
+    // let reading: u16 = adc1.read(pin).map_err(|e| anyhow::format_err!("{:?}", e))?;
+
+    // Ok((reading as f32 / 4095.0) * 2.0 * 3.3 * 1.1)
+    Ok(0.0)
 }
 
-static mut STATS: EspMutex<Option<Stats>> = EspMutex::new(None);
+fn temperature() -> Result<()> {
+    let raw = unsafe { adc1_get_raw(adc1_channel_t_ADC1_CHANNEL_4) };
 
-fn battery(adc1: &mut ADC<ADC1>, pin: &mut Gpio34<Analog>) -> Result<f32> {
-    let reading: u16 = adc1.read(pin).map_err(|e| anyhow::format_err!("{:?}", e))?;
+    if raw == -1 {
+        bail!("ADC read error");
+    }
 
-    Ok((reading as f32 / 4095.0) * 2.0 * 3.3 * 1.1)
-}
-
-fn temperature(adc1: &mut ADC<ADC1>, pin: &mut Gpio33<Analog>) -> Result<(u16, f32)> {
-    let raw: u16 = dbg!(adc1.read(pin).map_err(|e| anyhow::format_err!("{:?}", e))?);
     let voltage = (raw as f32 * 5.0) / 4096.0;
 
     let temperature_c = ((voltage - 0.5) * 100.0) / 2.0;
 
-    Ok((raw, temperature_c))
+    unsafe {
+        TEMPERATURE.lock(|l| *l = temperature_c);
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
     let start = Instant::now();
-    let periphs = esp32::Peripherals::take().unwrap();
-    let gpio = periphs.GPIO.split();
-    let sensors = periphs.SENS.split();
-
-    let mut battery_pin = gpio.gpio34.into_analog();
-    let mut temperature_pin = gpio.gpio33.into_analog();
-
-    let mut adc1_config = Adc1Config::new();
-    adc1_config.enable_pin(&mut battery_pin, Attenuation::Attenuation11dB);
-    adc1_config.enable_pin(&mut temperature_pin, Attenuation::Attenuation11dB);
-
-    let mut adc1 = ADC::adc1(sensors.adc1, adc1_config).unwrap();
 
     unsafe {
-        STATS.lock(|s| {
-            *s = Some(Stats {
-                start,
-                battery_volts: None,
-                temperature: None,
-                raw_adc: None,
-            });
-        });
+        adc1_config_channel_atten(adc1_channel_t_ADC1_CHANNEL_4, adc_atten_t_ADC_ATTEN_DB_11);
+        esp!(adc1_config_width(adc_bits_width_t_ADC_WIDTH_BIT_12))?;
     }
+
+    // let mut battery_pin = gpio.gpio34.into_analog();
 
     let netif = Arc::new(EspNetifStack::new()?);
     let sys_loop = Arc::new(EspSysLoopStack::new()?);
     let nvs = Arc::new(EspDefaultNvs::new()?);
 
     let _wifi = wifi(netif.clone(), sys_loop.clone(), nvs.clone())?;
-    let _http = httpd()?;
+    let _http = httpd(start)?;
     let _mdns = mdns()?;
 
     loop {
-        unsafe {
-            STATS.lock(|s| {
-                let s = s.as_mut().unwrap();
-
-                if let Ok(v) = battery(&mut adc1, &mut battery_pin) {
-                    s.battery_volts = Some(v);
-                }
-
-                if let Ok((raw, t)) = temperature(&mut adc1, &mut temperature_pin) {
-                    s.temperature = Some(t);
-                    s.raw_adc = Some(raw);
-                }
-            });
+        if let Err(e) = temperature() {
+            error!("Failed to read temperature: {}", e)
         }
 
         thread::sleep(Duration::from_secs(5));
@@ -136,17 +111,14 @@ fn mdns() -> Result<EspMdns> {
     Ok(mdns)
 }
 
-fn render_stats() -> String {
+fn render_stats(start: Instant) -> String {
     let mut s = String::new();
 
-    unsafe {
-        STATS.lock(|stats| {
-            let stats = stats.as_ref().unwrap();
+    stat(&mut s, "uptime_seconds", start.elapsed().as_secs());
 
-            stat(&mut s, "uptime_seconds", stats.start.elapsed().as_secs());
-            stat_opt(&mut s, "voltage_volts", stats.battery_volts);
-            stat_opt(&mut s, "temperature_celcius", stats.temperature);
-            stat_opt(&mut s, "raw_adc", stats.raw_adc);
+    unsafe {
+        TEMPERATURE.lock(|t| {
+            stat(&mut s, "temperature_celcius", *t);
         });
     }
 
@@ -160,21 +132,12 @@ where
     writeln!(s, "{} {}", name, val).unwrap();
 }
 
-fn stat_opt<T>(s: &mut String, name: &str, val: Option<T>)
-where
-    T: Display,
-{
-    if let Some(x) = val {
-        stat(s, name, x);
-    }
-}
-
-fn httpd() -> Result<Server> {
+fn httpd(start: Instant) -> Result<Server> {
     let server = ServerRegistry::new()
         .at("/")
         .get(move |_| Ok("this server serves prometheus-compatible metrics at /metrics".into()))?
         .at("/metrics")
-        .get(move |_| Ok(render_stats().into()))?;
+        .get(move |_| Ok(render_stats(start).into()))?;
 
     server.start(&Default::default())
 }
