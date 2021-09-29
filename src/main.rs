@@ -35,14 +35,14 @@ const SSID: &str = dotenv!("WIFI_SSID");
 const PASS: &str = dotenv!("WIFI_PASS");
 
 fn battery() -> Result<()> {
-    let raw = unsafe { adc1_get_raw(adc1_channel_t_ADC1_CHANNEL_6) };
-    if raw == -1 {
-        bail!("ADC read error");
-    }
+    // let raw = unsafe { adc1_get_raw(adc1_channel_t_ADC1_CHANNEL_6) };
+    // if raw == -1 {
+    //     bail!("ADC read error");
+    // }
 
-    let v = (raw as f32 / 4095.0) * 2.0 * 3.3 * 1.1;
+    // let v = (raw as f32 / 4095.0) * 2.0 * 3.3 * 1.1;
 
-    stats::store("voltage_volts", v);
+    // stats::store("voltage_volts", v);
 
     Ok(())
 }
