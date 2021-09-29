@@ -9,7 +9,7 @@ quickly.
 
 - Compiling/flashing
   - ESP fork of Rust (https://github.com/esp-rs/rust)
-  - ESP-ready Clang (https://kerkour.com/blog/compile-rust-for-esp32-xtensa-on-raspberry-pi-aarch64/)
+  - LLVM
   - https://github.com/esp-rs/espflash
 - Running
   - https://github.com/esp-rs/espmonitor (optional, for debug monitoring)
