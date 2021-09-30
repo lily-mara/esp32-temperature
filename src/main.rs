@@ -22,7 +22,8 @@ use esp_idf_sys::esp;
 use esp_idf_sys::{
     adc1_channel_t_ADC1_CHANNEL_4, adc1_channel_t_ADC1_CHANNEL_6, adc1_config_channel_atten,
     adc1_config_width, adc1_get_raw, adc_atten_t_ADC_ATTEN_DB_11,
-    adc_bits_width_t_ADC_WIDTH_BIT_12,
+    adc_bits_width_t_ADC_WIDTH_BIT_12, adc_unit_t_ADC_UNIT_1, esp_adc_cal_characteristics_t,
+    esp_adc_cal_characterize, esp_adc_cal_raw_to_voltage,
 };
 
 use dotenv_codegen::dotenv;
@@ -54,11 +55,27 @@ fn temperature() -> Result<()> {
         bail!("ADC read error");
     }
 
+    let characteristics = unsafe {
+        let mut chars = esp_adc_cal_characteristics_t::default();
+
+        esp_adc_cal_characterize(
+            adc_unit_t_ADC_UNIT_1,
+            adc_atten_t_ADC_ATTEN_DB_11,
+            adc_bits_width_t_ADC_WIDTH_BIT_12,
+            1100,
+            &mut chars,
+        );
+
+        chars
+    };
+
+    let voltage =
+        unsafe { esp_adc_cal_raw_to_voltage(raw as u32, &characteristics) as f32 } / 1000.0;
+
     stats::store("adc_raw", raw as f32);
+    stats::store("adc_voltage", voltage);
 
-    let voltage = (raw as f32 * 5.0) / 4096.0;
-
-    let temperature_c = ((voltage - 0.5) * 100.0) / 2.0;
+    let temperature_c = (voltage - 0.5) * 100.0;
 
     stats::store("temperature_celsius", temperature_c);
 
@@ -72,7 +89,7 @@ fn main() -> Result<()> {
         esp!(adc1_config_width(adc_bits_width_t_ADC_WIDTH_BIT_12))?;
 
         adc1_config_channel_atten(adc1_channel_t_ADC1_CHANNEL_4, adc_atten_t_ADC_ATTEN_DB_11);
-        adc1_config_channel_atten(adc1_channel_t_ADC1_CHANNEL_6, adc_atten_t_ADC_ATTEN_DB_11);
+        // adc1_config_channel_atten(adc1_channel_t_ADC1_CHANNEL_6, adc_atten_t_ADC_ATTEN_DB_11);
     }
 
     // let mut battery_pin = gpio.gpio34.into_analog();
